@@ -94,6 +94,8 @@ FileInstance() → 머신, 로트, 라우트 객체 생성
 Instance.__init__() → 이벤트 큐, 디스패치 매니저 설정
 ```
 
+**✅ 2단계 학습 완료** - 상세 내용: `/home/iamhjoo/Documents/IAMHJOO/PySCFabSim/2단계 - 데이터 흐름 추적.md`
+
 ### 2. 이벤트 기반 실행
 ```
 while not done:
