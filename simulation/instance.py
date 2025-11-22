@@ -168,20 +168,32 @@ class Instance:
         return machine_done, lot_done
 
     def get_times(self, setups, lots, machine):
+        """디스패칭 시 소요 시간 계산 (lot_time, machine_time, setup_time)"""
+        # 로트 처리 시간 = 공정 시간 + 로드/언로드 시간
         proc_t_samp = lots[0].actual_step.processing_time.sample()
         lot_time = proc_t_samp + machine.load_time + machine.unload_time
         for lot in lots:
             lot.processing_time += lot_time
+
+        # 다음 스텝이 있으면 운송 시간 추가
         if len(lots[0].remaining_steps) > 0:
             tt = lots[0].remaining_steps[0].transport_time.sample()
             lot_time += tt
             for lot in lots:
                 lot.transport_time += tt
+
+        # ========== Cascading 처리 ==========
+        # cascading: 첫 부분 처리 후 머신이 다음 로트를 받을 수 있음
         if lots[0].actual_step.processing_time == lots[0].actual_step.cascading_time:
+            # cascading 없음: 전체 처리 시간 후 머신 유휴
             cascade_t_samp = proc_t_samp
         else:
+            # cascading 있음: cascading_time 후 머신 유휴 (로트는 아직 처리 중)
             cascade_t_samp = lots[0].actual_step.cascading_time.sample()
+        # 머신이 다시 사용 가능해지는 시간
         machine_time = cascade_t_samp + (machine.load_time + machine.unload_time if not machine.cascading else 0)
+
+        # ========== Setup 시간 계산 ==========
         new_setup = lots[0].actual_step.setup_needed
         if new_setup != '' and machine.current_setup != new_setup:
             if lots[0].actual_step.setup_time is not None:
@@ -194,12 +206,16 @@ class Instance:
                 setup_time = 0
         else:
             setup_time = 0
+
+        # ========== min_runs 제약 설정 ==========
         if new_setup in self.setup_min_run:
             machine.min_runs_left = self.setup_min_run[new_setup]
             machine.min_runs_setup = new_setup
             machine.has_min_runs = True
         if setup_time > 0:
             machine.last_setup_time = setup_time
+
+        # 통계 업데이트
         machine.utilized_time += machine_time
         machine.setuped_time += setup_time
         machine.last_setup = machine.current_setup

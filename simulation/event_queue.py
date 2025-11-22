@@ -22,6 +22,7 @@ class EventQueue:
         elif item.timestamp > self.arr[-1].timestamp:
             self.arr.append(item)
         else:
+            # binary search - O(log n)
             lo = 0
             hi = len(self.arr)
             while lo < hi:

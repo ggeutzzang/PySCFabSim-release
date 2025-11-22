@@ -23,55 +23,72 @@ def dispatching_combined_permachine(ptuple_fcn, machine, time, setups):
 
 
 def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
+    """머신 기준으로 디스패칭할 로트 선택 (L4M 방식)"""
     time = instance.current_time
     if machine is None:
         for machine in instance.usable_machines:
             break
+    # 대기 중인 모든 로트의 우선순위 튜플(ptuple) 계산
     dispatching_combined_permachine(ptuple_fcn, machine, time, instance.setups)
+    # ptuple 기준으로 정렬 (작은 값 = 높은 우선순위)
     wl = sorted(machine.waiting_lots, key=lambda k: k.ptuple)
-    # select lots to dispatch
+    # 가장 높은 우선순위 로트 선택
     lot = wl[0]
+
+    # ========== 배치 처리 로직 ==========
     if lot.actual_step.batch_max > 1:
-        # construct batch
+        # 같은 step_name끼리 그룹핑 (배치로 묶을 수 있는 로트들)
         lot_m = defaultdict(lambda: [])
         for w in wl:
-            lot_m[w.actual_step.step_name].append(w)  # + '_' + w.part_name
+            lot_m[w.actual_step.step_name].append(w)
+        # 그룹별 우선순위 정렬
         lot_l = sorted(list(lot_m.values()),
                        key=lambda l: (
-                           l[0].ptuple[0],  # cqt
-                           l[0].ptuple[1],  # min run setup is the most important
-                           -min(1, len(l) / l[0].actual_step.batch_max),  # then maximize the batch size
-                           0 if len(l) >= l[0].actual_step.batch_min else 1,  # then take min batch size into account
-                           *(l[0].ptuple[2:]),  # finally, order based on prescribed priority rule
+                           l[0].ptuple[0],  # CQT 대기 중인 로트 우선
+                           l[0].ptuple[1],  # min_runs 제약 준수 우선
+                           -min(1, len(l) / l[0].actual_step.batch_max),  # 배치 채움률 높은 것 우선 (음수라서 큰 값이 앞으로)
+                           0 if len(l) >= l[0].actual_step.batch_min else 1,  # batch_min 충족하는 것 우선
+                           *(l[0].ptuple[2:]),  # 나머지는 기본 우선순위 규칙 따름
                        ))
-        lots: List[Lot] = lot_l[0]
+        lots: List[Lot] = lot_l[0]  # 가장 우선순위 높은 그룹 선택
+        # batch_max 초과 시 잘라냄
         if len(lots) > lots[0].actual_step.batch_max:
             lots = lots[:lots[0].actual_step.batch_max]
-        if len(lots) < lots[0].actual_step.batch_max:
+        # batch_min 미만이면 처리 안함 (더 모일 때까지 대기)
+        if len(lots) < lots[0].actual_step.batch_min:
             lots = None
     else:
-        # dispatch single lot
+        # ========== 단일 로트 처리 ==========
         lots = [lot]
+
+    # ========== Setup 최적화 ==========
+    # 현재 머신의 setup과 로트의 setup이 다르면, 같은 setup을 가진 다른 머신 찾기
     if lots is not None and machine.current_setup != lots[0].actual_step.setup_needed:
         m: Machine
         for m in instance.family_machines[machine.family]:
-            if m in instance.usable_machines and m.current_setup == lots[0].actual_step.setup_needed:  # TODO: check instance.free_machines[m.idx] bug
-                machine = m
+            if m in instance.usable_machines and m.current_setup == lots[0].actual_step.setup_needed:
+                machine = m  # setup 변경 없이 처리 가능한 머신으로 교체
                 break
+
+    # ========== min_runs 제약 처리 ==========
+    # min_runs_left가 남아있는데 다른 setup 로트를 처리하려 하면 거부 (최대 5회까지)
     if machine.dispatch_failed < 5 and machine.min_runs_left is not None and machine.min_runs_setup != lots[0].actual_step.setup_needed:
         machine.dispatch_failed += 1
-        lots = None
+        lots = None  # 디스패칭 실패 처리
     if lots is not None:
         machine.dispatch_failed = 0
     return machine, lots
 
 
 def build_batch(lot, nexts):
+    """같은 step_name을 가진 로트들을 배치로 묶음"""
     batch = [lot]
     if lot.actual_step.batch_max > 1:
         for bo_lot in nexts:
+            # 같은 공정 단계인 로트만 배치에 추가
             if lot.actual_step.step_name == bo_lot.actual_step.step_name:
                 batch.append(bo_lot)
+            # batch_max에 도달하면 중단
             if len(batch) == lot.actual_step.batch_max:
                 break
     return batch
